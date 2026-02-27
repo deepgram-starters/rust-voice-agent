@@ -231,11 +231,18 @@ async fn handle_health() -> impl IntoResponse {
 /// Forwards all messages (JSON and binary) bidirectionally without modification.
 async fn handle_voice_agent(
     State(config): State<Arc<AppConfig>>,
+    headers: axum::http::HeaderMap,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
     // Extract and validate JWT from access_token.<jwt> subprotocol.
-    // Axum's WebSocketUpgrade parses Sec-WebSocket-Protocol into its protocols() list.
-    let protocols: Vec<String> = ws.protocols().map(|p| p.to_string()).collect();
+    let protocols: Vec<String> = headers
+        .get("sec-websocket-protocol")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
     let valid_proto = match validate_ws_token(&protocols, &config.session_secret) {
         Some(proto) => proto,
         None => {
@@ -323,7 +330,7 @@ async fn handle_voice_agent_socket(client_ws: WebSocket, config: Arc<AppConfig>)
                 match msg {
                     Ok(tungstenite::Message::Text(text)) => {
                         let mut sender = client_sender_clone.lock().await;
-                        if sender.send(Message::Text(text.into())).await.is_err() {
+                        if sender.send(Message::Text(text.to_string().into())).await.is_err() {
                             eprintln!("Error forwarding text to client");
                             break;
                         }
@@ -395,7 +402,7 @@ async fn handle_voice_agent_socket(client_ws: WebSocket, config: Arc<AppConfig>)
                     Ok(Message::Text(text)) => {
                         let mut sender = deepgram_sender_clone.lock().await;
                         if sender
-                            .send(tungstenite::Message::Text(text.into()))
+                            .send(tungstenite::Message::Text(text.to_string().into()))
                             .await
                             .is_err()
                         {
